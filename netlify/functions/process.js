@@ -1,8 +1,10 @@
 exports.handler = async () => ({
   statusCode: 501,
-  headers: { "Content-Type": "application/json" },
+  headers: {
+    "Content-Type": "application/json"
+  },
   body: JSON.stringify({
-    error: "AI_SERVER_NOT_CONNECTED",
-    message: "AI Server မချိတ်ဆက်ရသေးပါ။"
+    error: "AI_PROVIDER_NOT_CONFIGURED",
+    message: "HWA Recap AI ဝန်ဆောင်မှု မချိတ်ဆက်ရသေးပါ။"
   })
 });

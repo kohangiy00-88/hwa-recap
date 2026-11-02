@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="my">
 <head>
@@ -69,6 +70,18 @@ $('video').addEventListener('change', () => {
     : 'ဗီဒီယိုဖိုင် မရွေးရသေးပါ။';
 });
 
+async function readResponse(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      'Server က မှန်ကန်တဲ့ JSON မပြန်ပါ။ HTTP ' +
+      response.status + ' / ' + text.slice(0,300)
+    );
+  }
+}
+
 $('start').addEventListener('click', async () => {
   if (!selectedFile) {
     $('status').textContent = 'ဗီဒီယိုဖိုင်ကို အရင်ရွေးပါ။';
@@ -76,17 +89,15 @@ $('start').addEventListener('click', async () => {
   }
 
   $('start').disabled = true;
-  $('status').textContent = 'Video ကို Upload လုပ်နေပါတယ်။ ခဏစောင့်ပါ။';
+  $('status').textContent = 'Upload စတင်ရန် ပြင်ဆင်နေပါတယ်။';
 
   try {
-    // 1. Gemini Files API ကို Netlify server မှတစ်ဆင့် upload လုပ်ရန်
+    // 1. Upload session ဖန်တီးရန်
     const uploadResponse = await fetch(
       '/.netlify/functions/process?action=upload',
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           fileName: selectedFile.name,
           mimeType: selectedFile.type || 'video/mp4',
@@ -95,7 +106,7 @@ $('start').addEventListener('click', async () => {
       }
     );
 
-    const uploadData = await uploadResponse.json();
+    const uploadData = await readResponse(uploadResponse);
 
     if (!uploadResponse.ok || !uploadData.uploadUrl) {
       throw new Error(
@@ -104,23 +115,26 @@ $('start').addEventListener('click', async () => {
       );
     }
 
-    $('status').textContent = 'Video ဖိုင် Upload လုပ်နေပါတယ်…';
+    // 2. Google သို့ ဗီဒီယိုပို့ရန်
+    $('status').textContent =
+      'Google ဆီ Video Upload လုပ်နေပါတယ်။ ခဏစောင့်ပါ။';
 
     const putResponse = await fetch(uploadData.uploadUrl, {
       method: 'POST',
       headers: {
-        'Content-Length': String(selectedFile.size),
         'X-Goog-Upload-Offset': '0',
         'X-Goog-Upload-Command': 'upload, finalize'
       },
       body: selectedFile
     });
 
-    const uploaded = await putResponse.json();
+    const uploaded = await readResponse(putResponse);
 
     if (!putResponse.ok) {
       throw new Error(
-        uploaded.error?.message || 'Video Upload မအောင်မြင်ပါ။'
+        uploaded.error?.message ||
+        uploaded.message ||
+        'Video Upload မအောင်မြင်ပါ။'
       );
     }
 
@@ -130,16 +144,15 @@ $('start').addEventListener('click', async () => {
       throw new Error('Video File URI မရပါ။');
     }
 
-    // 2. Server ထံ Video URI ပို့ပြီး Recap တောင်းရန်
-    $('status').textContent = 'AI က Video ကို စစ်ဆေးနေပါတယ်။';
+    // 3. Recap ထုတ်ရန်
+    $('status').textContent =
+      'AI က Video ကို စစ်ဆေးပြီး Recap ရေးနေပါတယ်။';
 
     const analyzeResponse = await fetch(
       '/.netlify/functions/process',
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           action: 'analyze',
           fileUri: file.uri,
@@ -148,7 +161,7 @@ $('start').addEventListener('click', async () => {
       }
     );
 
-    const result = await analyzeResponse.json();
+    const result = await readResponse(analyzeResponse);
 
     if (!analyzeResponse.ok || !result.success) {
       throw new Error(
@@ -164,7 +177,8 @@ $('start').addEventListener('click', async () => {
     $('status').textContent = 'Recap စာသား ရပါပြီ။';
 
   } catch (error) {
-    $('status').textContent = 'အမှား: ' + error.message;
+    $('status').textContent =
+      'အမှား: ' + (error.message || 'ချိတ်ဆက်မှု မအောင်မြင်ပါ။');
   } finally {
     $('start').disabled = false;
   }
@@ -195,13 +209,16 @@ $('save').addEventListener('click', () => {
     return;
   }
 
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(
+  const url = URL.createObjectURL(
     new Blob([text], {type:'text/plain;charset=utf-8'})
   );
+
+  const link = document.createElement('a');
+  link.href = url;
   link.download = 'hwa-recap.txt';
   link.click();
-  URL.revokeObjectURL(link.href);
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 </script>
 </body>

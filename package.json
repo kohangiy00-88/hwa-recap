@@ -1,0 +1,12 @@
+{
+  "name": "burmese-recap-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Burmese movie recap website starter",
+  "scripts": {
+    "dev": "netlify dev"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.0.0"
+  }
+}

@@ -62,6 +62,8 @@ button:disabled{opacity:.5}
 const $ = id => document.getElementById(id);
 let selectedFile = null;
 
+const CHUNK_SIZE = 2 * 1024 * 1024;
+
 $('video').addEventListener('change', () => {
   selectedFile = $('video').files[0] || null;
   $('info').textContent = selectedFile
@@ -70,14 +72,15 @@ $('video').addEventListener('change', () => {
     : 'ဗီဒီယိုဖိုင် မရွေးရသေးပါ။';
 });
 
-async function readResponse(response) {
+async function readJSON(response) {
   const text = await response.text();
+
   try {
     return JSON.parse(text);
   } catch {
     throw new Error(
-      'Server က မှန်ကန်တဲ့ JSON မပြန်ပါ။ HTTP ' +
-      response.status + ' / ' + text.slice(0,300)
+      'Server HTTP ' + response.status +
+      ': ' + text.slice(0,250)
     );
   }
 }
@@ -89,11 +92,12 @@ $('start').addEventListener('click', async () => {
   }
 
   $('start').disabled = true;
-  $('status').textContent = 'Upload စတင်ရန် ပြင်ဆင်နေပါတယ်။';
 
   try {
-    // 1. Upload session ဖန်တီးရန်
-    const uploadResponse = await fetch(
+    // 1. Upload session စတင်ခြင်း
+    $('status').textContent = 'Upload ပြင်ဆင်နေပါတယ်။';
+
+    const sessionResponse = await fetch(
       '/.netlify/functions/process?action=upload',
       {
         method: 'POST',
@@ -106,47 +110,84 @@ $('start').addEventListener('click', async () => {
       }
     );
 
-    const uploadData = await readResponse(uploadResponse);
+    const sessionData = await readJSON(sessionResponse);
 
-    if (!uploadResponse.ok || !uploadData.uploadUrl) {
+    if (!sessionResponse.ok || !sessionData.uploadUrl) {
       throw new Error(
-        uploadData.message || uploadData.error ||
+        sessionData.message ||
+        sessionData.error ||
         'Upload session မရပါ။'
       );
     }
 
-    // 2. Google သို့ ဗီဒီယိုပို့ရန်
-    $('status').textContent =
-      'Google ဆီ Video Upload လုပ်နေပါတယ်။ ခဏစောင့်ပါ။';
+    const uploadUrl = sessionData.uploadUrl;
+    const totalSize = selectedFile.size;
+    const totalChunks = Math.ceil(totalSize / CHUNK_SIZE);
 
-    const putResponse = await fetch(uploadData.uploadUrl, {
-      method: 'POST',
-      headers: {
-        'X-Goog-Upload-Offset': '0',
-        'X-Goog-Upload-Command': 'upload, finalize'
-      },
-      body: selectedFile
-    });
+    let offset = 0;
+    let uploadedFile = null;
 
-    const uploaded = await readResponse(putResponse);
+    // 2. 2MB စီ ခွဲတင်ခြင်း
+    for (let i = 0; i < totalChunks; i++) {
+      const end = Math.min(offset + CHUNK_SIZE, totalSize);
+      const chunk = selectedFile.slice(offset, end);
+      const isLast = end === totalSize;
 
-    if (!putResponse.ok) {
-      throw new Error(
-        uploaded.error?.message ||
-        uploaded.message ||
-        'Video Upload မအောင်မြင်ပါ။'
+      const percent = Math.floor(
+        (end / totalSize) * 100
       );
+
+      $('status').textContent =
+        'Google ဆီ Video Upload လုပ်နေပါတယ်။\n' +
+        percent + '% ပြီးပါပြီ (' +
+        (end / 1048576).toFixed(1) + ' / ' +
+        (totalSize / 1048576).toFixed(1) + ' MB)';
+
+      const uploadResponse = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'X-Goog-Upload-Offset': String(offset),
+          'X-Goog-Upload-Command': isLast
+            ? 'upload, finalize'
+            : 'upload'
+        },
+        body: chunk
+      });
+
+      const responseText = await uploadResponse.text();
+
+      if (!uploadResponse.ok) {
+        throw new Error(
+          'Upload အပိုင်း ' + (i + 1) +
+          ' မအောင်မြင်ပါ။ HTTP ' +
+          uploadResponse.status + ': ' +
+          responseText.slice(0,250)
+        );
+      }
+
+      if (isLast) {
+        try {
+          uploadedFile = JSON.parse(responseText);
+        } catch {
+          throw new Error(
+            'နောက်ဆုံး Upload တုံ့ပြန်ချက် မမှန်ပါ။'
+          );
+        }
+      }
+
+      offset = end;
     }
 
-    const file = uploaded.file || uploaded;
+    // 3. Google File URI ရယူခြင်း
+    const file = uploadedFile?.file || uploadedFile;
 
-    if (!file.uri) {
-      throw new Error('Video File URI မရပါ။');
+    if (!file?.uri) {
+      throw new Error('Google Video URI မရရှိပါ။');
     }
 
-    // 3. Recap ထုတ်ရန်
+    // 4. Recap တောင်းခြင်း
     $('status').textContent =
-      'AI က Video ကို စစ်ဆေးပြီး Recap ရေးနေပါတယ်။';
+      'Upload ပြီးပါပြီ။ AI က Recap ရေးနေပါတယ်။';
 
     const analyzeResponse = await fetch(
       '/.netlify/functions/process',
@@ -161,16 +202,18 @@ $('start').addEventListener('click', async () => {
       }
     );
 
-    const result = await readResponse(analyzeResponse);
+    const result = await readJSON(analyzeResponse);
 
     if (!analyzeResponse.ok || !result.success) {
       throw new Error(
-        result.message || result.error || 'Recap မထွက်လာပါ။'
+        result.message ||
+        result.error ||
+        'Recap မထွက်လာပါ။'
       );
     }
 
     if (!result.recap) {
-      throw new Error('AI က Recap စာသား မပြန်လာပါ။');
+      throw new Error('Recap စာသား မရရှိပါ။');
     }
 
     $('recap').value = result.recap;
@@ -178,7 +221,7 @@ $('start').addEventListener('click', async () => {
 
   } catch (error) {
     $('status').textContent =
-      'အမှား: ' + (error.message || 'ချိတ်ဆက်မှု မအောင်မြင်ပါ။');
+      'အမှား: ' + (error.message || 'Upload မအောင်မြင်ပါ။');
   } finally {
     $('start').disabled = false;
   }
